@@ -1,0 +1,243 @@
+name: Kittygram CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install flake8==6.0.0 pytest==7.4.0 requests==2.31.0
+
+      - name: Lint with flake8
+        run: |
+          cd backend
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Run backend tests
+        run: |
+          cd backend
+          python manage.py test
+
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Test frontend
+        run: |
+          cd frontend
+          npm ci --force
+          npm test -- --watchAll=false --passWithNoTests
+
+      - name: Run project tests
+        run: |
+          pip install -r tests/requirements.txt || true
+          cd tests
+          python -m pytest -v
+
+  build_and_push_to_docker_hub:
+    runs-on: ubuntu-latest
+    needs: tests
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
+            ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:${{ github.sha }}
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
+            ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:${{ github.sha }}
+
+      - name: Build and push gateway
+        uses: docker/build-push-action@v4
+        with:
+          context: ./nginx
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
+            ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build_and_push_to_docker_hub
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Create production docker-compose
+        run: |
+          cat > docker-compose.production.yml << 'EOF'
+          version: '3.8'
+
+          volumes:
+            static_volume:
+            media_volume:
+            pg_data:
+
+          services:
+            postgres:
+              image: postgres:13
+              volumes:
+                - pg_data:/var/lib/postgresql/data
+              env_file:
+                - .env
+              restart: always
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U django"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+
+            backend:
+              image: ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
+              volumes:
+                - static_volume:/app/collected_static
+                - media_volume:/app/media
+              depends_on:
+                postgres:
+                  condition: service_healthy
+              env_file:
+                - .env
+              restart: always
+              command: >
+                sh -c "python manage.py migrate &&
+                       python manage.py collectstatic --noinput &&
+                       gunicorn --bind 0.0.0.0:8000 kittygram_backend.wsgi"
+
+            frontend:
+              image: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
+              volumes:
+                - static_volume:/app/static
+              depends_on:
+                - backend
+              restart: always
+
+            gateway:
+              image: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
+              volumes:
+                - static_volume:/static
+                - media_volume:/media
+              ports:
+                - "9000:80"
+              depends_on:
+                - frontend
+                - backend
+              restart: always
+          EOF
+
+      - name: Create .env file on server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd ~/kittygram
+            cat > .env << 'EOF'
+            POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+            POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            DB_HOST=postgres
+            DB_PORT=5432
+            SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
+            DEBUG=False
+            ALLOWED_HOSTS=localhost,127.0.0.1,${{ secrets.HOST }}
+            EOF
+
+      - name: Copy docker-compose.production.yml to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "docker-compose.production.yml"
+          target: "kittygram/"
+
+      - name: Deploy on Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd ~/kittygram
+            docker compose -f docker-compose.production.yml pull
+            docker compose -f docker-compose.production.yml down
+            docker compose -f docker-compose.production.yml up -d
+            sleep 10
+            docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate
+            docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
+
+  post_deploy_tests:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Wait for application to start
+        run: sleep 30
+
+      - name: Run post-deploy tests
+        env:
+          KITTYGRAM_URL: ${{ secrets.KITTYGRAM_URL }}
+        run: |
+          pip install pytest requests
+          cd tests
+          python -m pytest -v test_connection.py
+
+      - name: Send Telegram notification
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            ��� ${{ github.actor }} выполнил деплой Kittygram!
+            ✅ Все тесты пройдены успешно
+            ��� Ссылка: ${{ secrets.KITTYGRAM_URL }}
+            ��� Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send failure notification
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            ❌ ${{ github.actor }} - деплой Kittygram не удался!
+            ��� Проверьте workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
