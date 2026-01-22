@@ -211,7 +211,7 @@ jobs:
           KITTYGRAM_URL: ${{ secrets.KITTYGRAM_URL }}
         run: |
           pip install pytest requests
-          cd tests
+          cd ${{ github.workspace }}/tests
           python -m pytest -v test_connection.py || true
 
       - name: Send Telegram notification
