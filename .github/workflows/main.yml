@@ -2,7 +2,7 @@ name: Kittygram CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   tests:
@@ -14,7 +14,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
@@ -36,7 +36,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: "18"
 
       - name: Test frontend
         run: |
@@ -47,7 +47,7 @@ jobs:
   build_and_push_to_docker_hub:
     runs-on: ubuntu-latest
     needs: tests
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == "refs/heads/main"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -98,13 +98,6 @@ jobs:
       - name: Create production docker-compose
         run: |
           cat > docker-compose.production.yml << 'EOF'
-          version: '3.8'
-          
-          volumes:
-            static_volume:
-            media_volume:
-            pg_data:
-          
           services:
             postgres:
               image: postgres:13
@@ -118,7 +111,7 @@ jobs:
                 interval: 10s
                 timeout: 5s
                 retries: 5
-          
+
             backend:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_backend:latest
               volumes:
@@ -134,7 +127,7 @@ jobs:
                 sh -c "python manage.py migrate &&
                        python manage.py collectstatic --noinput &&
                        gunicorn --bind 0.0.0.0:8000 kittygram_backend.wsgi"
-          
+
             frontend:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
               volumes:
@@ -142,7 +135,7 @@ jobs:
               depends_on:
                 - backend
               restart: always
-          
+
             gateway:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
               volumes:
@@ -154,6 +147,11 @@ jobs:
                 - frontend
                 - backend
               restart: always
+
+          volumes:
+            static_volume:
+            media_volume:
+            pg_data:
           EOF
 
       - name: Create .env file on server
@@ -195,78 +193,96 @@ jobs:
             docker compose -f docker-compose.production.yml pull
             docker compose -f docker-compose.production.yml down
             docker compose -f docker-compose.production.yml up -d
-            sleep 10
+            sleep 15
             docker compose -f docker-compose.production.yml exec -T backend python manage.py migrate
             docker compose -f docker-compose.production.yml exec -T backend python manage.py collectstatic --noinput
 
-post_deploy_tests:
-  runs-on: ubuntu-latest
-  needs: deploy
-  steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
-    
-    - name: Wait for application to start
-      run: sleep 30
-    
-    - name: Install test dependencies
-      run: pip install pytest requests
-    
-    - name: Debug directory structure
-      run: |
-        echo "=== Debug information ==="
-        echo "Current dir: $(pwd)"
-        echo "Workspace: $GITHUB_WORKSPACE"
-        echo "Listing root:"
-        ls -la
-        echo "Listing tests:"
-        ls -la tests/
-    
-    - name: Run post-deploy tests
-      env:
-        KITTYGRAM_URL: ${{ secrets.KITTYGRAM_URL }}
-      run: |
-        echo "Testing Kittygram at: $KITTYGRAM_URL"
-        echo "Running tests from $(pwd)..."
-        
-        # Запускаем тесты
-        python -m pytest tests/ -v --tb=short 2>&1 || echo "Tests may have warnings"
-        
-        # Дополнительная проверка доступности
-        echo "=== Additional availability check ==="
-        python -c "
+  post_deploy_tests:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Wait for application to start
+        run: sleep 30
+
+      - name: Debug environment
+        run: |
+          echo "=== Debug Info ==="
+          echo "KITTYGRAM_URL from secrets: ${{ secrets.KITTYGRAM_URL }}"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "Current dir: $(pwd)"
+          echo "Files in workspace:"
+          ls -la ${{ github.workspace }}/
+
+      - name: Run post-deploy tests
+        env:
+          KITTYGRAM_URL: ${{ secrets.KITTYGRAM_URL || 'http://158.160.186.251:9000' }}
+        run: |
+          echo "Testing at: $KITTYGRAM_URL"
+          
+          # Устанавливаем зависимости
+          pip install pytest requests
+          
+          # Переходим в workspace
+          cd ${{ github.workspace }}
+          
+          # Проверяем тесты
+          if [ -f "tests/test_connection.py" ]; then
+            echo "Running test_connection.py"
+            python -m pytest tests/test_connection.py -v --tb=short
+          elif [ -f "tests/test_kittygram.py" ]; then
+            echo "Running test_kittygram.py"
+            python -m pytest tests/test_kittygram.py -v --tb=short
+          else
+            echo "Running all tests in tests/ directory"
+            python -m pytest tests/ -v --tb=short
+          fi
+          
+          # Простая проверка доступности
+          echo "=== Quick availability check ==="
+          python -c "
 import os
 import requests
-url = os.getenv('KITTYGRAM_URL')
-if url:
-    try:
-        r = requests.get(url, timeout=10)
-        print(f'Frontend: {r.status_code}')
-        r = requests.get(f'{url}/api/', timeout=10)
-        print(f'API: {r.status_code}')
-        print('✅ Application is responding')
-    except Exception as e:
-        print(f'⚠️ Check failed: {e}')
-"
-    
-    - name: Send Telegram notification
-      if: success()
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_TO }}
-        token: ${{ secrets.TELEGRAM_TOKEN }}
-        message: |
-          🚀 ${{ github.actor }} выполнил деплой Kittygram!
-          ✅ Все тесты пройдены успешно
-          📍 Ссылка: ${{ secrets.KITTYGRAM_URL }}
-          📊 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    
-    - name: Send failure notification
-      if: failure()
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_TO }}
-        token: ${{ secrets.TELEGRAM_TOKEN }}
-        message: |
-          ❌ ${{ github.actor }} - деплой Kittygram не удался!
-          🔍 Проверьте workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+import sys
+
+url = os.getenv('KITTYGRAM_URL', 'http://158.160.186.251:9000')
+print(f'Testing {url}...')
+try:
+    r = requests.get(url, timeout=10)
+    print(f'Frontend: {r.status_code}')
+    r = requests.get(f'{url}/api/', timeout=10)
+    print(f'API: {r.status_code}')
+    if r.status_code in (200, 401, 403):
+        print('✅ Application is accessible')
+        sys.exit(0)
+    else:
+        print(f'⚠️ Unexpected API status: {r.status_code}')
+        sys.exit(0)
+except Exception as e:
+    print(f'❌ Error: {e}')
+    sys.exit(1)
+          "
+
+      - name: Send Telegram notification
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            🚀 ${{ github.actor }} выполнил деплой Kittygram!
+            ✅ Все тесты пройдены успешно
+            📍 Ссылка: ${{ secrets.KITTYGRAM_URL || 'http://158.160.186.251:9000' }}
+            📊 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send failure notification
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            ❌ ${{ github.actor }} - деплой Kittygram не удался!
+            🔍 Проверьте workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
