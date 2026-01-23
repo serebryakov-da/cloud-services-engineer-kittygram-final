@@ -1,13 +1,13 @@
-FROM node:18
+# Стадия сборки
+FROM node:18-alpine AS build
 WORKDIR /app
 
-COPY package.json package.json
-COPY package-lock.json package-lock.json
-
+COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
 RUN npm run build
-RUN npm install --global http-server
 
-CMD ["npx", "-y", "http-server", "-p", "8000", "/app/build"]
+# Финальный образ — только статические файлы
+FROM nginx:1.25-alpine
+COPY --from=build /app/build /static
