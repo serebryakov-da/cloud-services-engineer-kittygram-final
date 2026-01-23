@@ -215,7 +215,7 @@ jobs:
           echo "Testing at: $KITTYGRAM_URL"
 
           pip install pytest requests
-          cd $GITHUB_WORKSPACE
+          cd "$GITHUB_WORKSPACE"
 
           if [ -f "tests/test_connection.py" ]; then
             python -m pytest tests/test_connection.py -v --tb=short
@@ -225,13 +225,26 @@ jobs:
             python -m pytest tests/ -v --tb=short
           fi
 
-          python - <<EOF
-import requests, os, sys
-url = os.getenv("KITTYGRAM_URL")
-print(f"Testing {url}")
-r = requests.get(url, timeout=10)
-print("Frontend:", r.status_code)
-r = requests.get(f"{url}/api/", timeout=10)
-print("API:", r.status_code)
-sys.exit(0 if r.status_code in (200,401,403) else 1)
-EOF
+          python <<'EOF'
+          import os
+          import sys
+          import requests
+
+          url = os.getenv("KITTYGRAM_URL")
+          print(f"Testing {url}...")
+
+          try:
+              r = requests.get(url, timeout=10)
+              print("Frontend status:", r.status_code)
+
+              r = requests.get(f"{url}/api/", timeout=10)
+              print("API status:", r.status_code)
+
+              if r.status_code in (200, 401, 403):
+                  sys.exit(0)
+              else:
+                  sys.exit(1)
+          except Exception as e:
+              print("Error:", e)
+              sys.exit(1)
+          EOF
