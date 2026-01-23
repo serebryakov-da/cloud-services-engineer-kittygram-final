@@ -207,82 +207,31 @@ jobs:
       - name: Wait for application to start
         run: sleep 30
 
-      - name: Debug environment
-        run: |
-          echo "=== Debug Info ==="
-          echo "KITTYGRAM_URL from secrets: ${{ secrets.KITTYGRAM_URL }}"
-          echo "Workspace: $GITHUB_WORKSPACE"
-          echo "Current dir: $(pwd)"
-          echo "Files in workspace:"
-          ls -la ${{ github.workspace }}/
-
       - name: Run post-deploy tests
         env:
-          KITTYGRAM_URL: ${{ secrets.KITTYGRAM_URL || 'http://158.160.186.251:9000' }}
+          KITTYGRAM_URL: ${{ secrets.KITTYGRAM_URL }}
         run: |
+          KITTYGRAM_URL=${KITTYGRAM_URL:-http://158.160.186.251:9000}
           echo "Testing at: $KITTYGRAM_URL"
-          
-          # Устанавливаем зависимости
+
           pip install pytest requests
-          
-          # Переходим в workspace
-          cd ${{ github.workspace }}
-          
-          # Проверяем тесты
+          cd $GITHUB_WORKSPACE
+
           if [ -f "tests/test_connection.py" ]; then
-            echo "Running test_connection.py"
             python -m pytest tests/test_connection.py -v --tb=short
           elif [ -f "tests/test_kittygram.py" ]; then
-            echo "Running test_kittygram.py"
             python -m pytest tests/test_kittygram.py -v --tb=short
           else
-            echo "Running all tests in tests/ directory"
             python -m pytest tests/ -v --tb=short
           fi
-          
-          # Простая проверка доступности
-          echo "=== Quick availability check ==="
-          python -c "
-import os
-import requests
-import sys
 
-url = os.getenv('KITTYGRAM_URL', 'http://158.160.186.251:9000')
-print(f'Testing {url}...')
-try:
-    r = requests.get(url, timeout=10)
-    print(f'Frontend: {r.status_code}')
-    r = requests.get(f'{url}/api/', timeout=10)
-    print(f'API: {r.status_code}')
-    if r.status_code in (200, 401, 403):
-        print('✅ Application is accessible')
-        sys.exit(0)
-    else:
-        print(f'⚠️ Unexpected API status: {r.status_code}')
-        sys.exit(0)
-except Exception as e:
-    print(f'❌ Error: {e}')
-    sys.exit(1)
-          "
-
-      - name: Send Telegram notification
-        if: success()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_TO }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
-          message: |
-            🚀 ${{ github.actor }} выполнил деплой Kittygram!
-            ✅ Все тесты пройдены успешно
-            📍 Ссылка: ${{ secrets.KITTYGRAM_URL || 'http://158.160.186.251:9000' }}
-            📊 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      - name: Send failure notification
-        if: failure()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_TO }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
-          message: |
-            ❌ ${{ github.actor }} - деплой Kittygram не удался!
-            🔍 Проверьте workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          python - <<EOF
+import requests, os, sys
+url = os.getenv("KITTYGRAM_URL")
+print(f"Testing {url}")
+r = requests.get(url, timeout=10)
+print("Frontend:", r.status_code)
+r = requests.get(f"{url}/api/", timeout=10)
+print("API:", r.status_code)
+sys.exit(0 if r.status_code in (200,401,403) else 1)
+EOF
