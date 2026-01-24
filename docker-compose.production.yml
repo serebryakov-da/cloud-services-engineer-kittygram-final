@@ -41,7 +41,7 @@ services:
       - static_volume:/app/build
     depends_on:
       - backend
-    restart: always
+    restart: no
 
   gateway:
     image: ${DOCKER_USERNAME}/kittygram_gateway:latest

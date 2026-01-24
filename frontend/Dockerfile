@@ -6,4 +6,5 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+
+CMD ["sh", "-c", "npm run build && cp -r build/* /app/build/"]
