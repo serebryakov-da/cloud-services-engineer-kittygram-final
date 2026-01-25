@@ -7,4 +7,4 @@ RUN npm ci
 
 COPY . .
 
-CMD ["sh", "-c", "npm run build && cp -r build/* /app/build/"]
+CMD ["sh", "-c", "npm run build && cd /app/build && ln -sf static/js js && ln -sf static/css css && ln -sf static/media media"]
