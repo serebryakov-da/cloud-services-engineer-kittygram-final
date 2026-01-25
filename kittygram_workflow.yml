@@ -144,10 +144,10 @@ jobs:
             frontend:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
               volumes:
-                - static_volume:/app/static
+                - static_volume:/app/build
               depends_on:
                 - backend
-              restart: always
+              restart: "no"
 
             gateway:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
@@ -227,10 +227,10 @@ jobs:
           to: ${{ secrets.TELEGRAM_TO }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
-            ��� ${{ github.actor }} выполнил деплой Kittygram!
+            ��� ${{ github.actor }} выполнил деплой Kittygram!
             ✅ Все тесты пройдены успешно
-            ��� Ссылка: ${{ secrets.KITTYGRAM_URL }}
-            ��� Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            ��� Ссылка: ${{ secrets.KITTYGRAM_URL }}
+            ��� Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Send failure notification
         if: failure()
@@ -240,4 +240,4 @@ jobs:
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
             ❌ ${{ github.actor }} - деплой Kittygram не удался!
-            ��� Проверьте workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            ��� Проверьте workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

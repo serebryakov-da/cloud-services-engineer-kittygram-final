@@ -131,10 +131,10 @@ jobs:
             frontend:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_frontend:latest
               volumes:
-                - static_volume:/app/static
+                - static_volume:/app/build
               depends_on:
                 - backend
-              restart: always
+              restart: "no"
 
             gateway:
               image: ${{ secrets.DOCKER_USERNAME }}/kittygram_gateway:latest
